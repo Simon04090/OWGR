@@ -37,4 +37,21 @@
   <component name="VcsDirectoryMappings">
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
   </component>
+  <component name="libraryTable">
+    <library name="net.sourceforge.htmlcleaner:htmlcleaner:Latest" type="repository">
+      <properties maven-id="net.sourceforge.htmlcleaner:htmlcleaner:LATEST" />
+      <CLASSES>
+        <root url="jar://$PROJECT_DIR$/lib/htmlcleaner-2.23.jar!/" />
+        <root url="jar://$PROJECT_DIR$/lib/jdom2-2.0.5.jar!/" />
+      </CLASSES>
+      <JAVADOC>
+        <root url="jar://$PROJECT_DIR$/lib/htmlcleaner-2.23-javadoc.jar!/" />
+        <root url="jar://$PROJECT_DIR$/lib/jdom2-2.0.5-javadoc.jar!/" />
+      </JAVADOC>
+      <SOURCES>
+        <root url="jar://$PROJECT_DIR$/lib/htmlcleaner-2.23-sources.jar!/" />
+        <root url="jar://$PROJECT_DIR$/lib/jdom2-2.0.5-sources.jar!/" />
+      </SOURCES>
+    </library>
+  </component>
 </project>
