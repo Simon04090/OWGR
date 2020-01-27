@@ -1,10 +1,66 @@
+import org.htmlcleaner.CleanerProperties;
+import org.htmlcleaner.HtmlCleaner;
+import org.htmlcleaner.JDomSerializer;
+import org.jdom2.Document;
+import org.jdom2.Element;
+import org.jdom2.filter.Filters;
+import org.jdom2.xpath.XPathExpression;
+import org.jdom2.xpath.XPathFactory;
+
+import java.io.IOException;
 import java.math.BigDecimal;
+import java.net.URL;
+import java.time.Year;
+import java.util.ArrayList;
+import java.util.List;
 
 public class Main {
 
-    public static void main(String[] args) {
+    private static final List<Event> eventList = new ArrayList<>();
+
+    public static void main(String[] args) throws IOException {
         int endWeek = 27;
         int[][] weightIndex = getWeightIndex(endWeek);
+        Year endYear = Year.now();
+        eventsForYear(endYear, endYear);
+        eventsForYear(endYear.minusYears(1), endYear);
+        eventsForYear(endYear.minusYears(2), endYear);
+    }
+
+    /**
+     * Gets the event list for the given year of owgr.com and parses it into {@link Event}s.
+     * <p>
+     * Adds the event into the list.
+     *
+     * @param year    the year to get the events for.
+     * @param endYear the year that the period we are interested in ends at (to calculate the year index).
+     *
+     * @throws IOException if HtmlCleaner throws one when accessing the URL.
+     */
+    private static void eventsForYear(Year year, Year endYear) throws IOException {
+        Document doc = new JDomSerializer(new CleanerProperties(), true)
+                .createJDom(new HtmlCleaner().clean(new URL("http://www.owgr.com/events?pageNo=1&pageSize=ALL&tour=&year=" + year)));
+        XPathFactory xPathFactory = XPathFactory.instance();
+        XPathExpression<Element> expr = xPathFactory.compile("//div[3]/table/tbody/tr[td]", Filters.element());
+        List<Element> stuff = expr.evaluate(doc);
+        for(Element element : stuff) {
+            Element week = null, year1 = null, event = null;
+            for(Element child : element.getChildren()) {
+                String id = child.getAttributeValue("id");
+                if("ctl2".equals(id)) {
+                    week = child;
+                }
+                else if("ctl3".equals(id)) {
+                    year1 = child;
+                }
+                else if("ctl5".equals(id)) {
+                    event = child;
+                }
+
+            }
+            Event event1 = new Event(week, year1, event, endYear);
+            eventList.add(event1);
+        }
     }
 
     /**
