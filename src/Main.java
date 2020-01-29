@@ -7,14 +7,15 @@ import org.jdom2.filter.Filters;
 import org.jdom2.xpath.XPathExpression;
 import org.jdom2.xpath.XPathFactory;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.math.BigDecimal;
 import java.net.URL;
+import java.text.DecimalFormat;
 import java.time.Year;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Collectors;
 
 public class Main {
 
@@ -39,6 +40,8 @@ public class Main {
         for(Event event : eventList) {
             analyzeEvent(event, weightIndex[event.yearNum][event.week - 1]);
         }
+
+        printTable();
     }
 
     /**
@@ -120,6 +123,53 @@ public class Main {
             }
         }
         return positions;
+    }
+
+    /**
+     * Calculates the average points for each player, converts the numbers into decimal strings and prints a tab separated table into OWGR.txt and to System.out.
+     *
+     * @throws FileNotFoundException when the output file could not be created/edited.
+     */
+    private static void printTable() throws FileNotFoundException {
+        //Divides the points by eventCount or 40/52 if too small/large.
+        //Also discards the last digit (points now multiplied by 100,000) because we only need 4 decimal places for displaying and one additional for rounding.
+        LinkedHashMap<Integer, Long> playerAveragePointMap = playerWeightedPointsMap.entrySet().parallelStream()
+                .peek(entry -> entry.setValue(entry.getValue() / (Math.min(52, Math.max(40, playerEventCountMap.getOrDefault(entry.getKey(), 0))) * 10)))
+                .sorted(Collections.reverseOrder(Map.Entry.comparingByValue()))
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (o1, o2) -> o1, LinkedHashMap::new));
+        PrintWriter fileWriter = new PrintWriter("OWGR.txt");
+        int i = 1;
+        long previousPoints = 0;
+        int same = 1;
+        int maxNameLength = playerNameMap.entrySet().parallelStream().mapToInt(value -> value.getValue().length()).max().orElse(0);
+        //At least 5 digits (pad with zeros)
+        DecimalFormat format = new DecimalFormat("00000");
+        for(Map.Entry<Integer, Long> entry : playerAveragePointMap.entrySet()) {
+            Integer playerID = entry.getKey();
+            Long averagePoints = entry.getValue();
+            String name = playerNameMap.getOrDefault(playerID, "Fail");
+            //Round to 10s and discard last digit (now multiplied by 10,000)
+            long roundedAverage = ((averagePoints + 5) / 10);
+            String averageAsString = format.format(roundedAverage);
+            int endIndex = averageAsString.length() - 4;
+            //Format it so the last 4 digits are after the decimal point.
+            String formattedAverage = averageAsString.substring(0, endIndex) + "." + averageAsString.substring(endIndex);
+            String placePlusTabs = i + "." + (i < 100 ? "\t\t" : "\t");
+            String namePlusTabs = name + String.join("", Collections.nCopies(((maxNameLength - name.length() + 4) / 4), "\t"));
+            String output = placePlusTabs + namePlusTabs + (roundedAverage > 1000000 ? "" : " ") + formattedAverage;
+            fileWriter.println(output);
+            System.out.println(output);
+            if(previousPoints == roundedAverage) {
+                same++;
+            }
+            else {
+                i += same;
+                same = 1;
+                fileWriter.flush();
+            }
+            previousPoints = roundedAverage;
+        }
+        fileWriter.close();
     }
 
     /**
