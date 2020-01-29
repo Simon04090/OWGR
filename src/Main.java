@@ -1,12 +1,16 @@
-import org.htmlcleaner.CleanerProperties;
-import org.htmlcleaner.HtmlCleaner;
-import org.htmlcleaner.JDomSerializer;
+import org.htmlcleaner.*;
 import org.jdom2.Document;
 import org.jdom2.Element;
+import org.jdom2.JDOMException;
 import org.jdom2.filter.Filters;
+import org.jdom2.input.SAXBuilder;
+import org.jdom2.input.sax.BuilderErrorHandler;
+import org.jdom2.input.sax.SAXEngine;
 import org.jdom2.xpath.XPathExpression;
 import org.jdom2.xpath.XPathFactory;
+import org.xml.sax.SAXParseException;
 
+import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -28,14 +32,24 @@ public class Main {
     private static final Map<Integer, String> playerNameMap = new HashMap<>();
     private static final HtmlCleaner htmlCleaner = new HtmlCleaner();
     private static final JDomSerializer jDomSerializer = new JDomSerializer(new CleanerProperties(), true);
+    private static SAXEngine saxEngine;
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException, JDOMException {
         int endWeek = 27;
         int[][] weightIndex = getWeightIndex(endWeek);
         Year endYear = Year.now();
         eventsForYear(endYear, endYear);
         eventsForYear(endYear.minusYears(1), endYear);
         eventsForYear(endYear.minusYears(2), endYear);
+
+        SAXBuilder saxBuilder = new SAXBuilder();
+        saxBuilder.setErrorHandler(new BuilderErrorHandler() {
+            @Override
+            public void error(SAXParseException exception) {
+                exception.printStackTrace();
+            }
+        });
+        saxEngine = saxBuilder.buildEngine();
 
         for(Event event : eventList) {
             analyzeEvent(event, weightIndex[event.yearNum][event.week - 1]);
@@ -55,11 +69,24 @@ public class Main {
      *
      * @throws IOException if HtmlCleaner throws one when accessing the URL.
      */
-    private static void analyzeEvent(Event event, int weight) throws IOException {
+    private static void analyzeEvent(Event event, int weight) throws IOException, JDOMException {
         if(weight != 0) {
+
+            Document doc;
+            String pathname = "cache\\" + event.id + ".xml";
+            File file = new File(pathname);
+            XmlSerializer xmlSerializer = new CompactXmlSerializer(new CleanerProperties());
+            if(file.exists()) {
+                doc = saxEngine.build(file);
+            }
+            else {
+                URL url = new URL("http://www.owgr.com/en/Events/EventResult.aspx?eventid=" + event.id);
+                TagNode clean = htmlCleaner.clean(url);
+                doc = jDomSerializer.createJDom(clean);
+                xmlSerializer.writeToFile(clean, pathname);
+            }
+
             XPathFactory xPathFactory = XPathFactory.instance();
-            URL url = new URL("http://www.owgr.com/en/Events/EventResult.aspx?eventid=" + event.id);
-            Document doc = jDomSerializer.createJDom(htmlCleaner.clean(url));
 
             int[] positions = getPositions(doc);
 
