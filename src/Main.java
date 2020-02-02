@@ -7,6 +7,9 @@ import java.io.PrintWriter;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.*;
 import java.text.DecimalFormat;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
@@ -25,11 +28,36 @@ public class Main {
     private static final Map<Integer, Long> playerWeightedPointsMap = new HashMap<>();
     private static final Map<Integer, Integer> playerEventCountMap = new HashMap<>();
     private static final Map<Integer, String> playerNameMap = new HashMap<>();
+    private static Connection connection;
+    private static PreparedStatement eventInsertion;
+    private static PreparedStatement playerInsertion;
+    private static PreparedStatement pointsInsertion;
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException, ClassNotFoundException, SQLException {
         int endWeek = LocalDate.now().with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY)).get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
         int[][] weightIndex = getWeightIndex(endWeek);
         Year endYear = Year.now();
+        Class.forName("org.h2.Driver"); //Load right driver
+        connection = DriverManager.getConnection("jdbc:h2:./db;MODE=MySQL");
+        //Create Tables (only needed once) (Assuming if the file is there the tables have been created.)
+        if(!Files.exists(Path.of("db.mv.db"))) {
+            connection.createStatement().execute("CREATE TABLE EVENT (ID INTEGER NOT NULL, NAME TEXT, WEEK INTEGER, YEAR SMALLINT);\n" +
+                    "CREATE UNIQUE INDEX EVENT_ID_UINDEX ON EVENT (ID);" +
+                    "CREATE UNIQUE INDEX PRIMARY_KEY_3 ON EVENT (ID);\n" +
+                    "ALTER TABLE EVENT ADD CONSTRAINT EVENT_PK PRIMARY KEY (ID);" +
+                    "CREATE TABLE PLAYERS (ID INTEGER NOT NULL, NAME TEXT);\n" +
+                    "CREATE UNIQUE INDEX PLAYERS_ID_UINDEX ON PLAYERS (ID);\n" +
+                    "CREATE UNIQUE INDEX PRIMARY_KEY_D ON PLAYERS (ID);" +
+                    "ALTER TABLE PLAYERS ADD CONSTRAINT PLAYERS_PK PRIMARY KEY (ID);\n" +
+                    "CREATE TABLE POINTS (EVENTID  INTEGER NOT NULL, PLAYERID INTEGER NOT NULL, POINTS BIGINT NOT NULL, CONSTRAINT POINTS_EVENT_ID_FK FOREIGN KEY (EVENTID) " +
+                    "REFERENCES EVENT(ID), CONSTRAINT POINTS_PLAYERS_ID_FK FOREIGN KEY (PLAYERID) REFERENCES PLAYERS(ID));")
+            ;
+        }
+
+        eventInsertion = connection.prepareStatement("INSERT IGNORE INTO EVENT values (?,?,?,?)");
+        playerInsertion = connection.prepareStatement("INSERT IGNORE INTO PLAYERS VALUES (?,?)");
+        pointsInsertion = connection.prepareStatement("INSERT IGNORE INTO POINTS VALUES (?,?,?)");
+
         eventsForYear(endYear, endYear);
         eventsForYear(endYear.minusYears(1), endYear);
         eventsForYear(endYear.minusYears(2), endYear);
@@ -39,6 +67,9 @@ public class Main {
         }
 
         printTable();
+
+        connection.commit();
+        connection.close();
     }
 
     /**
@@ -52,7 +83,7 @@ public class Main {
      *
      * @throws IOException if HtmlCleaner throws one when accessing the URL.
      */
-    private static void analyzeEvent(Event event, int weight) throws IOException {
+    private static void analyzeEvent(Event event, int weight) throws IOException, SQLException {
         if(weight != 0) {
             var parse = Jsoup.parse(new URL("http://www.owgr.com/en/Events/EventResult.aspx?eventid=" + event.id), 10000);
 
@@ -87,6 +118,13 @@ public class Main {
                 playerEventCountMap.put(playerID, playerEventCountMap.getOrDefault(playerID, 0) + 1);
                 String playerName = players.get(i).html();
                 playerNameMap.put(playerID, playerName);
+                playerInsertion.setInt(1, playerID);
+                playerInsertion.setString(2, playerName);
+                playerInsertion.execute();
+                pointsInsertion.setInt(1, event.id);
+                pointsInsertion.setInt(2, playerID);
+                pointsInsertion.setLong(3, unweightedPoints);
+                pointsInsertion.execute();
             }
         }
     }
@@ -161,7 +199,7 @@ public class Main {
      *
      * @throws IOException if HtmlCleaner throws one when accessing the URL.
      */
-    private static void eventsForYear(Year year, Year referenceYear) throws IOException {
+    private static void eventsForYear(Year year, Year referenceYear) throws IOException, SQLException {
         var url = new URL("http://www.owgr.com/events?pageNo=1&pageSize=ALL&tour=&year=" + year);
         var parse = Jsoup.parse(url, 10000);
         var select = parse.select("#ctl1 > tbody > tr");
@@ -171,6 +209,12 @@ public class Main {
             var event = element.getElementById("ctl5");
             var event1 = new Event(week, year1, event, referenceYear);
             eventList.add(event1);
+            eventInsertion.setString(1, String.valueOf(event1.id));
+            eventInsertion.setString(2, event1.name);
+            eventInsertion.setString(3, String.valueOf(event1.week));
+            eventInsertion.setString(4, String.valueOf(event1.year));
+            eventInsertion.execute();
+
         }
     }
 
