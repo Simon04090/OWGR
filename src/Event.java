@@ -1,4 +1,4 @@
-import org.jdom2.Element;
+import org.jsoup.nodes.Element;
 
 import java.time.Year;
 import java.time.temporal.ChronoUnit;
@@ -14,9 +14,9 @@ public class Event {
     final int id;
 
     public Event(Element week, Element year, Element event, Year endYear) {
-        this.week = week != null ? Integer.parseInt(week.getValue()) : -1;
-        this.year = year != null ? Year.of(Integer.parseInt(year.getValue())) : Year.now();
-        this.id = event != null ? Integer.parseInt(event.getChild("a").getAttribute("href").getValue().split("=")[1]) : -1;
+        this.week = week != null ? Integer.parseInt(week.html()) : -1;
+        this.year = year != null ? Year.of(Integer.parseInt(year.html())) : Year.now();
+        this.id = event != null ? Integer.parseInt(event.child(0).attr("href").split("=")[1]) : -1;
         this.yearNum = 2 - (int) this.year.until(endYear, ChronoUnit.YEARS);
     }
 

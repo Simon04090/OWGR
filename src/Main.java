@@ -1,15 +1,6 @@
-import org.htmlcleaner.*;
-import org.jdom2.Document;
-import org.jdom2.Element;
-import org.jdom2.JDOMException;
-import org.jdom2.filter.Filters;
-import org.jdom2.input.SAXBuilder;
-import org.jdom2.input.sax.BuilderErrorHandler;
-import org.jdom2.input.sax.SAXEngine;
-import org.jdom2.xpath.XPathFactory;
-import org.xml.sax.SAXParseException;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
 
-import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -30,26 +21,14 @@ public class Main {
     private static final Map<Integer, Long> playerWeightedPointsMap = new HashMap<>();
     private static final Map<Integer, Integer> playerEventCountMap = new HashMap<>();
     private static final Map<Integer, String> playerNameMap = new HashMap<>();
-    private static final HtmlCleaner htmlCleaner = new HtmlCleaner();
-    private static final JDomSerializer jDomSerializer = new JDomSerializer(new CleanerProperties(), true);
-    private static SAXEngine saxEngine;
 
-    public static void main(String[] args) throws IOException, JDOMException {
+    public static void main(String[] args) throws IOException {
         int endWeek = 27;
         int[][] weightIndex = getWeightIndex(endWeek);
         Year endYear = Year.now();
         eventsForYear(endYear, endYear);
         eventsForYear(endYear.minusYears(1), endYear);
         eventsForYear(endYear.minusYears(2), endYear);
-
-        SAXBuilder saxBuilder = new SAXBuilder();
-        saxBuilder.setErrorHandler(new BuilderErrorHandler() {
-            @Override
-            public void error(SAXParseException exception) {
-                exception.printStackTrace();
-            }
-        });
-        saxEngine = saxBuilder.buildEngine();
 
         for(Event event : eventList) {
             analyzeEvent(event, weightIndex[event.yearNum][event.week - 1]);
@@ -69,40 +48,22 @@ public class Main {
      *
      * @throws IOException if HtmlCleaner throws one when accessing the URL.
      */
-    private static void analyzeEvent(Event event, int weight) throws IOException, JDOMException {
+    private static void analyzeEvent(Event event, int weight) throws IOException {
         if(weight != 0) {
+            var parse = Jsoup.parse(new URL("http://www.owgr.com/en/Events/EventResult.aspx?eventid=" + event.id), 10000);
 
-            Document doc;
-            String pathname = "cache\\" + event.id + ".xml";
-            File file = new File(pathname);
-            XmlSerializer xmlSerializer = new CompactXmlSerializer(new CleanerProperties());
-            if(file.exists()) {
-                doc = saxEngine.build(file);
-            }
-            else {
-                TagNode clean = htmlCleaner.clean(new URL("http://www.owgr.com/en/Events/EventResult.aspx?eventid=" + event.id));
-                doc = jDomSerializer.createJDom(clean);
-                xmlSerializer.writeToFile(clean, pathname);
-            }
-
-            XPathFactory xPathFactory = XPathFactory.instance();
-
-            int[] positions = getPositions(doc);
-
-            var exprPlayers = xPathFactory.compile("//div[2]/table/tbody/tr[td]/*[" + positions[0] + "]", Filters.element());
-            var players = exprPlayers.evaluate(doc);
-
-            var exprPoints = xPathFactory.compile("//div[2]/table/tbody/tr[td]/*[" + positions[1] + "]", Filters.element());
-            var points = exprPoints.evaluate(doc);
+            int pointPos = getPointPos(parse);
+            var players = parse.select("#phmaincontent_0_ctl00_PanelCurrentEvent > table > tbody > tr > td.name > a");
+            var points = parse.select("#phmaincontent_0_ctl00_PanelCurrentEvent > table > tbody > tr > td:nth-child(" + pointPos + ")");
 
             if(players.size() != points.size()) {
                 throw new IllegalStateException("Size of player list does not equal size of point list for event " + event.id);
             }
             for(int i = 0; i < players.size(); i++) {
-                int playerID = Integer.parseInt(players.get(i).getChild("a").getAttributeValue("href").split("=")[1]);
+                int playerID = Integer.parseInt(players.get(i).attr("href").split("=")[1]);
                 //The following is done with Strings to avoid rounding errors.
                 //Add ".00", so if the number wasn't decimal we get one with two decimal places.
-                String[] splitByDecimalPoint = (points.get(i).getValue() + ".00").split("\\.");
+                String[] splitByDecimalPoint = (points.get(i).html() + ".00").split("\\.");
                 //Only keep two decimal places
                 if(splitByDecimalPoint[1].length() > 2) {
                     splitByDecimalPoint[1] = splitByDecimalPoint[1].substring(0, 2);
@@ -120,7 +81,7 @@ public class Main {
                     playerWeightedPointsMap.put(playerID, playerWeightedPointsMap.getOrDefault(playerID, 0L) + weightedPoints);
                 }
                 playerEventCountMap.put(playerID, playerEventCountMap.getOrDefault(playerID, 0) + 1);
-                String playerName = players.get(i).getChild("a").getValue();
+                String playerName = players.get(i).html();
                 playerNameMap.put(playerID, playerName);
             }
         }
@@ -135,20 +96,10 @@ public class Main {
      *
      * @return an array of the form [nameIndex, rankingPointsIndex].
      */
-    private static int[] getPositions(Document parse) {
-        var expression = XPathFactory.instance().compile("//tr[2]/th", Filters.element());
-        var header = expression.evaluate(parse);
-        int[] positions = {3, 9};
-        for(int i = 0; i < header.size(); i++) {
-            Element element = header.get(i);
-            if(element.getValue().equals("Name")) {
-                positions[0] = i + 1;
-            }
-            else if(element.getValue().equals("Ranking Points")) {
-                positions[1] = i + 1;
-            }
-        }
-        return positions;
+    private static int getPointPos(Document parse) {
+        var header = parse.select("#phmaincontent_0_ctl00_PanelCurrentEvent > table > thead > tr:nth-child(2) > th");
+        return header.indexOf(header.select(".ranking_points.ws.header").get(0)) + 1;
+
     }
 
     /**
@@ -207,25 +158,13 @@ public class Main {
      * @throws IOException if HtmlCleaner throws one when accessing the URL.
      */
     private static void eventsForYear(Year year, Year referenceYear) throws IOException {
-        Document doc = jDomSerializer.createJDom(htmlCleaner.clean(new URL("http://www.owgr.com/events?pageNo=1&pageSize=ALL&tour=&year=" + year)));
-        XPathFactory xPathFactory = XPathFactory.instance();
-        var expr = xPathFactory.compile("//div[3]/table/tbody/tr[td]", Filters.element());
-        var stuff = expr.evaluate(doc);
-        for(Element element : stuff) {
-            Element week = null, year1 = null, event = null;
-            for(Element child : element.getChildren()) {
-                String id = child.getAttributeValue("id");
-                if("ctl2".equals(id)) {
-                    week = child;
-                }
-                else if("ctl3".equals(id)) {
-                    year1 = child;
-                }
-                else if("ctl5".equals(id)) {
-                    event = child;
-                }
-
-            }
+        var url = new URL("http://www.owgr.com/events?pageNo=1&pageSize=ALL&tour=&year=" + year);
+        var parse = Jsoup.parse(url, 10000);
+        var select = parse.select("#ctl1 > tbody > tr");
+        for(var element : select) {
+            var week = element.getElementById("ctl2");
+            var year1 = element.getElementById("ctl3");
+            var event = element.getElementById("ctl5");
             var event1 = new Event(week, year1, event, referenceYear);
             eventList.add(event1);
         }
