@@ -6,7 +6,6 @@ import org.jdom2.filter.Filters;
 import org.jdom2.input.SAXBuilder;
 import org.jdom2.input.sax.BuilderErrorHandler;
 import org.jdom2.input.sax.SAXEngine;
-import org.jdom2.xpath.XPathExpression;
 import org.jdom2.xpath.XPathFactory;
 import org.xml.sax.SAXParseException;
 
@@ -15,6 +14,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.URL;
 import java.text.DecimalFormat;
 import java.time.Year;
@@ -80,8 +80,7 @@ public class Main {
                 doc = saxEngine.build(file);
             }
             else {
-                URL url = new URL("http://www.owgr.com/en/Events/EventResult.aspx?eventid=" + event.id);
-                TagNode clean = htmlCleaner.clean(url);
+                TagNode clean = htmlCleaner.clean(new URL("http://www.owgr.com/en/Events/EventResult.aspx?eventid=" + event.id));
                 doc = jDomSerializer.createJDom(clean);
                 xmlSerializer.writeToFile(clean, pathname);
             }
@@ -90,11 +89,11 @@ public class Main {
 
             int[] positions = getPositions(doc);
 
-            XPathExpression<Element> exprPlayers = xPathFactory.compile("//div[2]/table/tbody/tr[td]/*[" + positions[0] + "]", Filters.element());
-            List<Element> players = exprPlayers.evaluate(doc);
+            var exprPlayers = xPathFactory.compile("//div[2]/table/tbody/tr[td]/*[" + positions[0] + "]", Filters.element());
+            var players = exprPlayers.evaluate(doc);
 
-            XPathExpression<Element> exprPoints = xPathFactory.compile("//div[2]/table/tbody/tr[td]/*[" + positions[1] + "]", Filters.element());
-            List<Element> points = exprPoints.evaluate(doc);
+            var exprPoints = xPathFactory.compile("//div[2]/table/tbody/tr[td]/*[" + positions[1] + "]", Filters.element());
+            var points = exprPoints.evaluate(doc);
 
             if(players.size() != points.size()) {
                 throw new IllegalStateException("Size of player list does not equal size of point list for event " + event.id);
@@ -132,16 +131,16 @@ public class Main {
      * <p>
      * It is necessary to calculate this dynamically because the events can have 3 or 4 rounds depending on the tour.
      *
-     * @param doc the parsed event result page.
+     * @param parse the parsed event result page.
      *
      * @return an array of the form [nameIndex, rankingPointsIndex].
      */
-    private static int[] getPositions(Document doc) {
-        XPathExpression<Element> expression = XPathFactory.instance().compile("//tr[2]/th", Filters.element());
-        List<Element> evaluated = expression.evaluate(doc);
+    private static int[] getPositions(Document parse) {
+        var expression = XPathFactory.instance().compile("//tr[2]/th", Filters.element());
+        var header = expression.evaluate(parse);
         int[] positions = {3, 9};
-        for(int i = 0; i < evaluated.size(); i++) {
-            Element element = evaluated.get(i);
+        for(int i = 0; i < header.size(); i++) {
+            Element element = header.get(i);
             if(element.getValue().equals("Name")) {
                 positions[0] = i + 1;
             }
@@ -160,41 +159,39 @@ public class Main {
     private static void printTable() throws FileNotFoundException {
         //Divides the points by eventCount or 40/52 if too small/large.
         //Also discards the last digit (points now multiplied by 100,000) because we only need 4 decimal places for displaying and one additional for rounding.
-        LinkedHashMap<Integer, Long> playerAveragePointMap = playerWeightedPointsMap.entrySet().parallelStream()
+        var playerAveragePointMap = playerWeightedPointsMap.entrySet().parallelStream()
                 .peek(entry -> entry.setValue(entry.getValue() / (Math.min(52, Math.max(40, playerEventCountMap.getOrDefault(entry.getKey(), 0))) * 10)))
                 .sorted(Collections.reverseOrder(Map.Entry.comparingByValue()))
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (o1, o2) -> o1, LinkedHashMap::new));
-        PrintWriter fileWriter = new PrintWriter("OWGR.txt");
-        int i = 1;
-        long previousPoints = 0;
-        int same = 1;
+        var fileWriter = new PrintWriter("OWGR.txt");
+        int place = 1;
+        long previousPositionPoints = 0;
+        int numberTied = 1;
         int maxNameLength = playerNameMap.entrySet().parallelStream().mapToInt(value -> value.getValue().length()).max().orElse(0);
         //At least 5 digits (pad with zeros)
-        DecimalFormat format = new DecimalFormat("00000");
-        for(Map.Entry<Integer, Long> entry : playerAveragePointMap.entrySet()) {
-            Integer playerID = entry.getKey();
-            Long averagePoints = entry.getValue();
-            String name = playerNameMap.getOrDefault(playerID, "Fail");
+        var format = new DecimalFormat("00000");
+        for(Map.Entry<Integer, Long> playerIDPoints : playerAveragePointMap.entrySet()) {
+            String playerName = playerNameMap.getOrDefault(playerIDPoints.getKey(), "Fail");
             //Round to 10s and discard last digit (now multiplied by 10,000)
-            long roundedAverage = ((averagePoints + 5) / 10);
+            long roundedAverage = ((playerIDPoints.getValue() + 5) / 10);
             String averageAsString = format.format(roundedAverage);
             int endIndex = averageAsString.length() - 4;
             //Format it so the last 4 digits are after the decimal point.
             String formattedAverage = averageAsString.substring(0, endIndex) + "." + averageAsString.substring(endIndex);
-            String placePlusTabs = i + "." + (i < 100 ? "\t\t" : "\t");
-            String namePlusTabs = name + String.join("", Collections.nCopies(((maxNameLength - name.length() + 4) / 4), "\t"));
+            String placePlusTabs = place + "." + (place < 100 ? "\t\t" : "\t");
+            String namePlusTabs = playerName + String.join("", Collections.nCopies(((maxNameLength - playerName.length() + 4) / 4), "\t"));
             String output = placePlusTabs + namePlusTabs + (roundedAverage > 1000000 ? "" : " ") + formattedAverage;
             fileWriter.println(output);
             System.out.println(output);
-            if(previousPoints == roundedAverage) {
-                same++;
+            if(previousPositionPoints == roundedAverage) {
+                numberTied++;
             }
             else {
-                i += same;
-                same = 1;
+                place += numberTied;
+                numberTied = 1;
                 fileWriter.flush();
             }
-            previousPoints = roundedAverage;
+            previousPositionPoints = roundedAverage;
         }
         fileWriter.close();
     }
@@ -204,16 +201,16 @@ public class Main {
      * <p>
      * Adds the event into the list.
      *
-     * @param year    the year to get the events for.
-     * @param endYear the year that the period we are interested in ends at (to calculate the year index).
+     * @param year          the year to get the events for.
+     * @param referenceYear the year that the period we are interested in ends at (to calculate the year index).
      *
      * @throws IOException if HtmlCleaner throws one when accessing the URL.
      */
-    private static void eventsForYear(Year year, Year endYear) throws IOException {
+    private static void eventsForYear(Year year, Year referenceYear) throws IOException {
         Document doc = jDomSerializer.createJDom(htmlCleaner.clean(new URL("http://www.owgr.com/events?pageNo=1&pageSize=ALL&tour=&year=" + year)));
         XPathFactory xPathFactory = XPathFactory.instance();
-        XPathExpression<Element> expr = xPathFactory.compile("//div[3]/table/tbody/tr[td]", Filters.element());
-        List<Element> stuff = expr.evaluate(doc);
+        var expr = xPathFactory.compile("//div[3]/table/tbody/tr[td]", Filters.element());
+        var stuff = expr.evaluate(doc);
         for(Element element : stuff) {
             Element week = null, year1 = null, event = null;
             for(Element child : element.getChildren()) {
@@ -229,7 +226,7 @@ public class Main {
                 }
 
             }
-            Event event1 = new Event(week, year1, event, endYear);
+            var event1 = new Event(week, year1, event, referenceYear);
             eventList.add(event1);
         }
     }
@@ -260,10 +257,10 @@ public class Main {
                 currentYear--;
             }
         }
-        BigDecimal ninetyTwo = BigDecimal.valueOf(92);
+        var ninetyTwo = BigDecimal.valueOf(92);
         //Next 91 weeks 1/92 less on each one
         for(int i = 91; i >= 1; i--) {
-            BigDecimal tmp = BigDecimal.valueOf(i * 10000).divide(ninetyTwo, 0, BigDecimal.ROUND_HALF_UP); //Result will have no decimal places
+            var tmp = BigDecimal.valueOf(i * 10000).divide(ninetyTwo, 0, RoundingMode.HALF_UP); //Result will have no decimal places
             weightIndex[currentYear][currentWeek] = tmp.intValue();
             currentWeek--;
             //Wrap to next year
