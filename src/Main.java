@@ -8,7 +8,11 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URL;
 import java.text.DecimalFormat;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
 import java.time.Year;
+import java.time.temporal.IsoFields;
+import java.time.temporal.TemporalAdjusters;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -23,7 +27,7 @@ public class Main {
     private static final Map<Integer, String> playerNameMap = new HashMap<>();
 
     public static void main(String[] args) throws IOException {
-        int endWeek = 27;
+        int endWeek = LocalDate.now().with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY)).get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
         int[][] weightIndex = getWeightIndex(endWeek);
         Year endYear = Year.now();
         eventsForYear(endYear, endYear);
