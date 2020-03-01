@@ -1,9 +1,7 @@
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.PrintWriter;
+import java.io.*;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URL;
@@ -37,7 +35,7 @@ public class Main {
     private static PreparedStatement pointSelection;
     private static PreparedStatement playerSelection;
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) {
         int endWeek = LocalDate.now().with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY)).get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
         int[][] weightIndex = getWeightIndex(endWeek);
         Year endYear = Year.now();
@@ -97,10 +95,8 @@ public class Main {
      *
      * @param event  the event to analyze.
      * @param weight the weight
-     *
-     * @throws IOException if HtmlCleaner throws one when accessing the URL.
      */
-    private static void analyzeEvent(Event event, int weight) throws IOException {
+    private static void analyzeEvent(Event event, int weight) {
         if(weight != 0) {
             try {
                 pointSelection.setInt(1, event.id);
@@ -141,7 +137,13 @@ public class Main {
                 e.printStackTrace();
             }
 
-            var parse = Jsoup.parse(new URL("http://www.owgr.com/en/Events/EventResult.aspx?eventid=" + event.id), 10000);
+            Document parse;
+            try {
+                parse = Jsoup.parse(new URL("http://www.owgr.com/en/Events/EventResult.aspx?eventid=" + event.id), 10000);
+            } catch(IOException e) {
+                System.err.println("Failed to parse the results for the event " + event + " with the following exception");
+                throw new UncheckedIOException(e);
+            }
 
             int pointPos = getPointPos(parse);
             var players = parse.select("#phmaincontent_0_ctl00_PanelCurrentEvent > table > tbody > tr > td.name > a");
@@ -208,17 +210,40 @@ public class Main {
 
     /**
      * Calculates the average points for each player, converts the numbers into decimal strings and prints a tab separated table into OWGR.txt and to System.out.
-     *
-     * @throws FileNotFoundException when the output file could not be created/edited.
      */
-    private static void printTable() throws FileNotFoundException {
+    private static void printTable() {
         //Divides the points by eventCount or 40/52 if too small/large.
         //Also discards the last digit (points now multiplied by 100,000) because we only need 4 decimal places for displaying and one additional for rounding.
         var playerAveragePointMap = playerWeightedPointsMap.entrySet().parallelStream()
                 .peek(entry -> entry.setValue(entry.getValue() / (Math.min(52, Math.max(40, playerEventCountMap.getOrDefault(entry.getKey(), 0))) * 10)))
                 .sorted(Collections.reverseOrder(Map.Entry.comparingByValue()))
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (o1, o2) -> o1, LinkedHashMap::new));
-        var fileWriter = new PrintWriter("OWGR.txt");
+        PrintWriter writer;
+        try {
+            var fileWriter = new PrintWriter("OWGR.txt");
+            OutputStream outputStream = new OutputStream() {
+                @Override
+                public void write(int i) {
+                    fileWriter.write(i);
+                    System.out.write(i);
+                }
+
+                @Override
+                public void flush() {
+                    fileWriter.flush();
+                }
+
+                @Override
+                public void close() {
+                    fileWriter.close();
+                }
+            };
+            writer = new PrintWriter(outputStream, true);
+        } catch(FileNotFoundException e) {
+            System.err.println("Could not create fileWriter. Only printing to console.");
+            e.printStackTrace();
+            writer = new PrintWriter(System.out, true);
+        }
         int place = 1;
         long previousPositionPoints = 0;
         int numberTied = 1;
@@ -236,19 +261,17 @@ public class Main {
             String placePlusTabs = place + "." + (place < 100 ? "\t\t" : "\t");
             String namePlusTabs = playerName + "\t".repeat(((maxNameLength - playerName.length() + 4) / 4));
             String output = placePlusTabs + namePlusTabs + (roundedAverage > 1000000 ? "" : " ") + formattedAverage;
-            fileWriter.println(output);
-            System.out.println(output);
+            writer.println(output);
             if(previousPositionPoints == roundedAverage) {
                 numberTied++;
             }
             else {
                 place += numberTied;
                 numberTied = 1;
-                fileWriter.flush();
             }
             previousPositionPoints = roundedAverage;
         }
-        fileWriter.close();
+        writer.close();
     }
 
     /**
@@ -258,12 +281,16 @@ public class Main {
      *
      * @param year          the year to get the events for.
      * @param referenceYear the year that the period we are interested in ends at (to calculate the year index).
-     *
-     * @throws IOException if HtmlCleaner throws one when accessing the URL.
      */
-    private static void eventsForYear(Year year, Year referenceYear) throws IOException {
-        var url = new URL("http://www.owgr.com/events?pageNo=1&pageSize=ALL&tour=&year=" + year);
-        var parse = Jsoup.parse(url, 10000);
+    private static void eventsForYear(Year year, Year referenceYear) {
+        Document parse;
+        try {
+            var url = new URL("http://www.owgr.com/events?pageNo=1&pageSize=ALL&tour=&year=" + year);
+            parse = Jsoup.parse(url, 10000);
+        } catch(IOException e) {
+            System.err.println("Failed to parse the events for year " + year + " with the following exception");
+            throw new UncheckedIOException(e);
+        }
         var select = parse.select("#ctl1 > tbody > tr");
         for(var element : select) {
             var week = element.getElementById("ctl2");
