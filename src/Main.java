@@ -32,6 +32,8 @@ public class Main {
     private static PreparedStatement eventInsertion;
     private static PreparedStatement playerInsertion;
     private static PreparedStatement pointsInsertion;
+    private static PreparedStatement pointSelection;
+    private static PreparedStatement playerSelection;
 
     public static void main(String[] args) throws IOException, ClassNotFoundException, SQLException {
         int endWeek = LocalDate.now().with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY)).get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
@@ -57,6 +59,9 @@ public class Main {
         eventInsertion = connection.prepareStatement("INSERT IGNORE INTO EVENT values (?,?,?,?)");
         playerInsertion = connection.prepareStatement("INSERT IGNORE INTO PLAYERS VALUES (?,?)");
         pointsInsertion = connection.prepareStatement("INSERT IGNORE INTO POINTS VALUES (?,?,?)");
+
+        pointSelection = connection.prepareStatement("SELECT * FROM POINTS WHERE EVENTID = ?");
+        playerSelection = connection.prepareStatement("SELECT NAME FROM PLAYERS WHERE ID = ?");
 
         eventsForYear(endYear, endYear);
         eventsForYear(endYear.minusYears(1), endYear);
@@ -85,46 +90,79 @@ public class Main {
      */
     private static void analyzeEvent(Event event, int weight) throws IOException, SQLException {
         if(weight != 0) {
-            var parse = Jsoup.parse(new URL("http://www.owgr.com/en/Events/EventResult.aspx?eventid=" + event.id), 10000);
-
-            int pointPos = getPointPos(parse);
-            var players = parse.select("#phmaincontent_0_ctl00_PanelCurrentEvent > table > tbody > tr > td.name > a");
-            var points = parse.select("#phmaincontent_0_ctl00_PanelCurrentEvent > table > tbody > tr > td:nth-child(" + pointPos + ")");
-
-            if(players.size() != points.size()) {
-                throw new IllegalStateException("Size of player list does not equal size of point list for event " + event.id);
+            pointSelection.setInt(1, event.id);
+            pointSelection.execute();
+            ResultSet resultSet = pointSelection.getResultSet();
+            //Try getting the points for this event out of the database if they exist, only try parsing if they aren't in the database.
+            if(resultSet.next()) {
+                do {
+                    int playerID = resultSet.getInt("PLAYERID");
+                    //These points are multiplied by 100
+                    long unweightedPoints = resultSet.getLong("POINTS");
+                    //The points are now multiplied by 100 * 10,000 = 1,000,000
+                    long weightedPoints = unweightedPoints * weight;
+                    if(weightedPoints != 0) {
+                        playerWeightedPointsMap.put(playerID, playerWeightedPointsMap.getOrDefault(playerID, 0L) + weightedPoints);
+                    }
+                    playerEventCountMap.put(playerID, playerEventCountMap.getOrDefault(playerID, 0) + 1);
+                    playerNameMap.computeIfAbsent(playerID, integer -> {
+                        try {
+                            playerSelection.setInt(1, playerID);
+                            playerSelection.execute();
+                            ResultSet set = playerSelection.getResultSet();
+                            if(set.next()) {
+                                return set.getString("NAME");
+                            }
+                            return null;
+                        } catch(SQLException e) {
+                            e.printStackTrace();
+                            return null;
+                        }
+                    });
+                } while(resultSet.next());
             }
-            for(int i = 0; i < players.size(); i++) {
-                int playerID = Integer.parseInt(players.get(i).attr("href").split("=")[1]);
-                //The following is done with Strings to avoid rounding errors.
-                //Add ".00", so if the number wasn't decimal we get one with two decimal places.
-                String[] splitByDecimalPoint = (points.get(i).html() + ".00").split("\\.");
-                //Only keep two decimal places
-                if(splitByDecimalPoint[1].length() > 2) {
-                    splitByDecimalPoint[1] = splitByDecimalPoint[1].substring(0, 2);
+            else {
+                var parse = Jsoup.parse(new URL("http://www.owgr.com/en/Events/EventResult.aspx?eventid=" + event.id), 10000);
+
+                int pointPos = getPointPos(parse);
+                var players = parse.select("#phmaincontent_0_ctl00_PanelCurrentEvent > table > tbody > tr > td.name > a");
+                var points = parse.select("#phmaincontent_0_ctl00_PanelCurrentEvent > table > tbody > tr > td:nth-child(" + pointPos + ")");
+
+                if(players.size() != points.size()) {
+                    throw new IllegalStateException("Size of player list does not equal size of point list for event " + event.id);
                 }
-                //String of the points as whole number multiplied by 100 rounded down
-                String unweightedString = splitByDecimalPoint[0] + splitByDecimalPoint[1];
-                //If we only had one decimal place "multiply" by 10 because it was only 10 times the actual value
-                if(splitByDecimalPoint[1].length() < 2) {
-                    unweightedString += "0";
+                for(int i = 0; i < players.size(); i++) {
+                    int playerID = Integer.parseInt(players.get(i).attr("href").split("=")[1]);
+                    //The following is done with Strings to avoid rounding errors.
+                    //Add ".00", so if the number wasn't decimal we get one with two decimal places.
+                    String[] splitByDecimalPoint = (points.get(i).html() + ".00").split("\\.");
+                    //Only keep two decimal places
+                    if(splitByDecimalPoint[1].length() > 2) {
+                        splitByDecimalPoint[1] = splitByDecimalPoint[1].substring(0, 2);
+                    }
+                    //String of the points as whole number multiplied by 100 rounded down
+                    String unweightedString = splitByDecimalPoint[0] + splitByDecimalPoint[1];
+                    //If we only had one decimal place "multiply" by 10 because it was only 10 times the actual value
+                    if(splitByDecimalPoint[1].length() < 2) {
+                        unweightedString += "0";
+                    }
+                    long unweightedPoints = Long.parseLong(unweightedString);
+                    //The points are now multiplied by 100 * 10,000 = 1,000,000
+                    long weightedPoints = unweightedPoints * weight;
+                    if(weightedPoints != 0) {
+                        playerWeightedPointsMap.put(playerID, playerWeightedPointsMap.getOrDefault(playerID, 0L) + weightedPoints);
+                    }
+                    playerEventCountMap.put(playerID, playerEventCountMap.getOrDefault(playerID, 0) + 1);
+                    String playerName = players.get(i).html();
+                    playerNameMap.put(playerID, playerName);
+                    playerInsertion.setInt(1, playerID);
+                    playerInsertion.setString(2, playerName);
+                    playerInsertion.execute();
+                    pointsInsertion.setInt(1, event.id);
+                    pointsInsertion.setInt(2, playerID);
+                    pointsInsertion.setLong(3, unweightedPoints);
+                    pointsInsertion.execute();
                 }
-                long unweightedPoints = Long.parseLong(unweightedString);
-                //The points are now multiplied by 100 * 10,000 = 1,000,000
-                long weightedPoints = unweightedPoints * weight;
-                if(weightedPoints != 0) {
-                    playerWeightedPointsMap.put(playerID, playerWeightedPointsMap.getOrDefault(playerID, 0L) + weightedPoints);
-                }
-                playerEventCountMap.put(playerID, playerEventCountMap.getOrDefault(playerID, 0) + 1);
-                String playerName = players.get(i).html();
-                playerNameMap.put(playerID, playerName);
-                playerInsertion.setInt(1, playerID);
-                playerInsertion.setString(2, playerName);
-                playerInsertion.execute();
-                pointsInsertion.setInt(1, event.id);
-                pointsInsertion.setInt(2, playerID);
-                pointsInsertion.setLong(3, unweightedPoints);
-                pointsInsertion.execute();
             }
         }
     }
