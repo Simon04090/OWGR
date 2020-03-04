@@ -9,7 +9,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.text.DecimalFormat;
 import java.time.DayOfWeek;
@@ -69,7 +68,8 @@ public class Main {
             eventsForYear(endYear.minusYears(2), endYear);
 
             for(Event event : eventList) {
-                analyzeEvent(event, weightIndex[event.yearNum][event.week - 1]);
+                event.analyze(weightIndex[event.yearNum][event.week - 1], pointSelection, playerSelection, playerInsertion, pointsInsertion, playerWeightedPointsMap,
+                        playerEventCountMap, playerNameMap);
             }
 
             printTable();
@@ -78,126 +78,6 @@ public class Main {
             System.err.println("Some error occurred while interacting with the database. Most likely when opening/closing the connection or creating the statements.");
             e.printStackTrace();
         }
-    }
-
-    /**
-     * Analyzes the event.
-     * <p>
-     * If the event was already parsed and is available in the database uses that data. Otherwise, parses the result page of the given event on owgr.com.  Parses the points of
-     * every player, applies the given weight and adds it to the value saved in the playerWeightedPointsMap, also increases the count stored in the playerEventCountMap and stores
-     * the playerName in the playerNameMap.
-     *
-     * @param event  the event to analyze.
-     * @param weight the weight
-     */
-    private static void analyzeEvent(Event event, int weight) {
-        if(weight != 0) {
-            try {
-                pointSelection.setInt(1, event.id);
-                ResultSet resultSet = pointSelection.executeQuery();
-                //Try getting the points for this event out of the database if they exist, only try parsing if they aren't in the database.
-                if(resultSet.next()) {
-                    do {
-                        int playerID = resultSet.getInt("PLAYER_ID");
-                        //These points are multiplied by 100
-                        long unweightedPoints = resultSet.getLong("POINTS");
-                        //The points are now multiplied by 100 * 10,000 = 1,000,000
-                        long weightedPoints = unweightedPoints * weight;
-                        if(weightedPoints != 0) {
-                            playerWeightedPointsMap.put(playerID, playerWeightedPointsMap.getOrDefault(playerID, 0L) + weightedPoints);
-                        }
-                        playerEventCountMap.put(playerID, playerEventCountMap.getOrDefault(playerID, 0) + 1);
-                        playerNameMap.computeIfAbsent(playerID, integer -> {
-                            try {
-                                playerSelection.setInt(1, playerID);
-                                ResultSet set = playerSelection.executeQuery();
-                                if(set.next()) {
-                                    return set.getString("NAME");
-                                }
-                                return null;
-                            } catch(SQLException e) {
-                                System.err.println("Could not retrieve name for playerID " + playerID + ".");
-                                e.printStackTrace();
-                                return null;
-                            }
-                        });
-                    } while(resultSet.next());
-                    return;
-                }
-            } catch(SQLException e) {
-                System.err.println("The following error occurred when trying to get the information for the event " + event + " out of the database. Trying to get it normally.");
-                e.printStackTrace();
-            }
-
-            Document parse;
-            try {
-                parse = Jsoup.parse(new URL("http://www.owgr.com/en/Events/EventResult.aspx?eventid=" + event.id), 10000);
-            } catch(IOException e) {
-                System.err.println("Failed to parse the results for the event " + event + " with the following exception");
-                throw new UncheckedIOException(e);
-            }
-
-            int pointPos = getPointPos(parse);
-            var players = parse.select("#phmaincontent_0_ctl00_PanelCurrentEvent > table > tbody > tr > td.name > a");
-            var points = parse.select("#phmaincontent_0_ctl00_PanelCurrentEvent > table > tbody > tr > td:nth-child(" + pointPos + ")");
-
-            if(players.size() != points.size()) {
-                throw new IllegalStateException("Size of player list does not equal size of point list for event " + event.id);
-            }
-            for(int i = 0; i < players.size(); i++) {
-                int playerID = Integer.parseInt(players.get(i).attr("href").split("=")[1]);
-                //The following is done with Strings to avoid rounding errors.
-                //Add ".00", so if the number wasn't decimal we get one with two decimal places.
-                String[] splitByDecimalPoint = (points.get(i).html() + ".00").split("\\.");
-                //Only keep two decimal places
-                if(splitByDecimalPoint[1].length() > 2) {
-                    splitByDecimalPoint[1] = splitByDecimalPoint[1].substring(0, 2);
-                }
-                //String of the points as whole number multiplied by 100 rounded down
-                String unweightedString = splitByDecimalPoint[0] + splitByDecimalPoint[1];
-                //If we only had one decimal place "multiply" by 10 because it was only 10 times the actual value
-                if(splitByDecimalPoint[1].length() < 2) {
-                    unweightedString += "0";
-                }
-                long unweightedPoints = Long.parseLong(unweightedString);
-                //The points are now multiplied by 100 * 10,000 = 1,000,000
-                long weightedPoints = unweightedPoints * weight;
-                if(weightedPoints != 0) {
-                    playerWeightedPointsMap.put(playerID, playerWeightedPointsMap.getOrDefault(playerID, 0L) + weightedPoints);
-                }
-                playerEventCountMap.put(playerID, playerEventCountMap.getOrDefault(playerID, 0) + 1);
-                String playerName = players.get(i).html();
-                playerNameMap.put(playerID, playerName);
-
-                try {
-                    playerInsertion.setInt(1, playerID);
-                    playerInsertion.setString(2, playerName);
-                    playerInsertion.execute();
-                    pointsInsertion.setInt(1, event.id);
-                    pointsInsertion.setInt(2, playerID);
-                    pointsInsertion.setLong(3, unweightedPoints);
-                    pointsInsertion.execute();
-                } catch(SQLException e) {
-                    System.err.println("Could not insert the points/name of (" + playerID + ", " + playerName + ") for event " + event);
-                    e.printStackTrace();
-                }
-            }
-        }
-    }
-
-    /**
-     * Calculates the index of the "Ranking Points" column on a parsed event result page from owgr.com.
-     * <p>
-     * It is necessary to calculate this dynamically because the events can have 3 or 4 rounds depending on the tour.
-     *
-     * @param parse the parsed event result page.
-     *
-     * @return the rankingPointsIndex.
-     */
-    private static int getPointPos(Document parse) {
-        var header = parse.select("#phmaincontent_0_ctl00_PanelCurrentEvent > table > thead > tr:nth-child(2) > th");
-        return header.indexOf(header.select(".ranking_points.ws.header").get(0)) + 1;
-
     }
 
     /**
