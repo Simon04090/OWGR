@@ -19,7 +19,7 @@ public class Event {
         this.year = year != null ? Year.of(Integer.parseInt(year.html())) : Year.now();
         this.id = event != null ? Integer.parseInt(event.child(0).attr("href").split("=")[1]) : -1;
         this.yearNum = 2 - (int) this.year.until(endYear, ChronoUnit.YEARS);
-        this.name = event.child(0).html();
+        this.name = event != null ? event.child(0).html() : "";
     }
 
     @Override
