@@ -90,8 +90,9 @@ public class Main {
     /**
      * Analyzes the event.
      * <p>
-     * Parses the result page of the given event.Parses the points of every player, applies the given weight and saves it in the playerWeightedPointsMap, also increases the count
-     * stored in the playerEventCountMap and stores the playerName in the playerNameMap.
+     * If the event was already parsed and is available in the database uses that data. Otherwise, parses the result page of the given event on owgr.com.  Parses the points of
+     * every player, applies the given weight and adds it to the value saved in the playerWeightedPointsMap, also increases the count stored in the playerEventCountMap and stores
+     * the playerName in the playerNameMap.
      *
      * @param event  the event to analyze.
      * @param weight the weight
@@ -133,7 +134,7 @@ public class Main {
                     return;
                 }
             } catch(SQLException e) {
-                System.err.println("The following error occured when trying to get the information for the event " + event + " out of the database. Trying to get it normally.");
+                System.err.println("The following error occurred when trying to get the information for the event " + event + " out of the database. Trying to get it normally.");
                 e.printStackTrace();
             }
 
@@ -186,7 +187,7 @@ public class Main {
                     pointsInsertion.setLong(3, unweightedPoints);
                     pointsInsertion.execute();
                 } catch(SQLException e) {
-                    System.err.println("Could not insert the points/name of (" + playerID + ", " + playerName + ")");
+                    System.err.println("Could not insert the points/name of (" + playerID + ", " + playerName + ") for event " + event);
                     e.printStackTrace();
                 }
             }
@@ -194,13 +195,13 @@ public class Main {
     }
 
     /**
-     * Calculates the index of the "Name" and "Ranking Points" columns on a parsed event result page from owgr.com.
+     * Calculates the index of the "Ranking Points" column on a parsed event result page from owgr.com.
      * <p>
      * It is necessary to calculate this dynamically because the events can have 3 or 4 rounds depending on the tour.
      *
      * @param parse the parsed event result page.
      *
-     * @return an array of the form [nameIndex, rankingPointsIndex].
+     * @return the rankingPointsIndex.
      */
     private static int getPointPos(Document parse) {
         var header = parse.select("#phmaincontent_0_ctl00_PanelCurrentEvent > table > thead > tr:nth-child(2) > th");
@@ -277,7 +278,7 @@ public class Main {
     /**
      * Gets the event list for the given year of owgr.com and parses it into {@link Event}s.
      * <p>
-     * Adds the event into the list.
+     * Adds the event into the list. Also inserts them into the EVENT table of the database.
      *
      * @param year          the year to get the events for.
      * @param referenceYear the year that the period we are interested in ends at (to calculate the year index).
@@ -306,7 +307,7 @@ public class Main {
                 eventInsertion.setString(4, String.valueOf(event1.year));
                 eventInsertion.execute();
             } catch(SQLException e) {
-                System.err.println("Could not insert the event " + event);
+                System.err.println("Could not insert the event " + event1);
                 e.printStackTrace();
             }
         }
