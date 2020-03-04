@@ -51,24 +51,17 @@ public class Main {
         try(var connection = DriverManager.getConnection("jdbc:h2:./db;MODE=MySQL")) {
             //Create Tables (only needed once) (Assuming if the file is there the tables have been created.)
             if(!Files.exists(Path.of("db.mv.db"))) {
-                connection.createStatement().execute("CREATE TABLE EVENT (ID INTEGER NOT NULL, NAME TEXT, WEEK INTEGER, YEAR SMALLINT);\n" +
-                        "CREATE UNIQUE INDEX EVENT_ID_UINDEX ON EVENT (ID);" +
-                        "CREATE UNIQUE INDEX PRIMARY_KEY_3 ON EVENT (ID);\n" +
-                        "ALTER TABLE EVENT ADD CONSTRAINT EVENT_PK PRIMARY KEY (ID);" +
-                        "CREATE TABLE PLAYERS (ID INTEGER NOT NULL, NAME TEXT);\n" +
-                        "CREATE UNIQUE INDEX PLAYERS_ID_UINDEX ON PLAYERS (ID);\n" +
-                        "CREATE UNIQUE INDEX PRIMARY_KEY_D ON PLAYERS (ID);" +
-                        "ALTER TABLE PLAYERS ADD CONSTRAINT PLAYERS_PK PRIMARY KEY (ID);\n" +
-                        "CREATE TABLE POINTS (EVENTID  INTEGER NOT NULL, PLAYERID INTEGER NOT NULL, POINTS BIGINT NOT NULL, CONSTRAINT POINTS_EVENT_ID_FK FOREIGN KEY (EVENTID) " +
-                        "REFERENCES EVENT(ID), CONSTRAINT POINTS_PLAYERS_ID_FK FOREIGN KEY (PLAYERID) REFERENCES PLAYERS(ID));")
-                ;
+                connection.createStatement().execute("CREATE TABLE EVENT (ID INTEGER NOT NULL, NAME TEXT, WEEK TINYINT, YEAR YEAR, CONSTRAINT EVENT_PK PRIMARY KEY (ID));\n" +
+                        "CREATE TABLE PLAYERS (ID INTEGER NOT NULL, NAME TEXT, CONSTRAINT PLAYERS_PK PRIMARY KEY (ID));\n" +
+                        "CREATE TABLE POINTS (EVENT_ID  INTEGER NOT NULL, PLAYER_ID INTEGER NOT NULL, POINTS BIGINT NOT NULL, CONSTRAINT POINTS_EVENT_ID_FK FOREIGN KEY " +
+                        "(EVENT_ID) REFERENCES EVENT(ID), CONSTRAINT POINTS_PLAYERS_ID_FK FOREIGN KEY (PLAYER_ID) REFERENCES PLAYERS(ID));");
             }
 
-            eventInsertion = connection.prepareStatement("INSERT IGNORE INTO EVENT values (?,?,?,?)");
+            eventInsertion = connection.prepareStatement("INSERT IGNORE INTO EVENT VALUES (?,?,?,?)");
             playerInsertion = connection.prepareStatement("INSERT IGNORE INTO PLAYERS VALUES (?,?)");
             pointsInsertion = connection.prepareStatement("INSERT IGNORE INTO POINTS VALUES (?,?,?)");
 
-            pointSelection = connection.prepareStatement("SELECT * FROM POINTS WHERE EVENTID = ?");
+            pointSelection = connection.prepareStatement("SELECT * FROM POINTS WHERE EVENT_ID = ?");
             playerSelection = connection.prepareStatement("SELECT NAME FROM PLAYERS WHERE ID = ?");
 
             eventsForYear(endYear, endYear);
@@ -101,12 +94,11 @@ public class Main {
         if(weight != 0) {
             try {
                 pointSelection.setInt(1, event.id);
-                pointSelection.execute();
-                ResultSet resultSet = pointSelection.getResultSet();
+                ResultSet resultSet = pointSelection.executeQuery();
                 //Try getting the points for this event out of the database if they exist, only try parsing if they aren't in the database.
                 if(resultSet.next()) {
                     do {
-                        int playerID = resultSet.getInt("PLAYERID");
+                        int playerID = resultSet.getInt("PLAYER_ID");
                         //These points are multiplied by 100
                         long unweightedPoints = resultSet.getLong("POINTS");
                         //The points are now multiplied by 100 * 10,000 = 1,000,000
@@ -118,8 +110,7 @@ public class Main {
                         playerNameMap.computeIfAbsent(playerID, integer -> {
                             try {
                                 playerSelection.setInt(1, playerID);
-                                playerSelection.execute();
-                                ResultSet set = playerSelection.getResultSet();
+                                ResultSet set = playerSelection.executeQuery();
                                 if(set.next()) {
                                     return set.getString("NAME");
                                 }
@@ -301,10 +292,10 @@ public class Main {
             eventList.add(event1);
 
             try {
-                eventInsertion.setString(1, String.valueOf(event1.id));
+                eventInsertion.setInt(1, event1.id);
                 eventInsertion.setString(2, event1.name);
-                eventInsertion.setString(3, String.valueOf(event1.week));
-                eventInsertion.setString(4, String.valueOf(event1.year));
+                eventInsertion.setInt(3, event1.week);
+                eventInsertion.setInt(4, event1.year.getValue());
                 eventInsertion.execute();
             } catch(SQLException e) {
                 System.err.println("Could not insert the event " + event1);
