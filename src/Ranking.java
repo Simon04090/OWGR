@@ -258,7 +258,7 @@ public class Ranking {
             //Format it so the last 4 digits are after the decimal point.
             String formattedAverage = averageAsString.substring(0, endIndex) + "." + averageAsString.substring(endIndex);
             String placePlusTabs = place + "." + (place < 100 ? "\t\t" : "\t");
-            String namePlusTabs = playerName + "\t".repeat(((maxNameLength - playerName.length() + 4) / 4));
+            String namePlusTabs = playerName + "\t".repeat(((maxNameLength - playerName.length() + 5) / 4));
             String output = placePlusTabs + namePlusTabs + (roundedAverage > 1000000 ? "" : " ") + formattedAverage;
             writer.println(output);
             if(previousPositionPoints == roundedAverage) {
