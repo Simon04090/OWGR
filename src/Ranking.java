@@ -98,6 +98,7 @@ public class Ranking {
             e.printStackTrace();
         }
         analyzeEvents(events);
+        reevalutePlayersOver52Events();
 
     }
 
@@ -143,6 +144,41 @@ public class Ranking {
                 e.printStackTrace();
             }
         });
+    }
+
+    /**
+     * For players with more than 52 Events only the 52 most recent events count.
+     * <p>
+     * So for those players we reset the weighted points to 0 and recalculate them with only the most recent 52 events they played.
+     */
+    private void reevalutePlayersOver52Events() {
+        try(var connection = connectionPool.getConnection()) {
+            connection.createStatement().execute("UPDATE WEIGHTED_POINTS SET WEIGHTED_POINTS = 0 WHERE COUNT > 52;");
+            var statement = connection.createStatement();
+            var resultSet = statement.executeQuery("SELECT EVENT_ID, PLAYER_ID, POINTS, WEEK, YEAR FROM (SELECT EVENT_ID, EVENT.WEEK, EVENT.YEAR, POINTS, p.PLAYER_ID, " +
+                    "row_number() OVER (PARTITION BY p.PLAYER_ID ORDER BY p.PLAYER_ID, EVENT.YEAR DESC, EVENT.WEEK DESC) \"row\" FROM POINTS p INNER JOIN EVENT ON EVENT_ID = ID " +
+                    "INNER JOIN WEIGHTED_POINTS on p.PLAYER_ID = WEIGHTED_POINTS.PLAYER_ID WHERE COUNT > 52 AND WEIGHTED_POINTS.WEEK = " + this.endWeek + " AND WEIGHTED_POINTS" +
+                    ".YEAR = " + this.endYear + ") tbl WHERE \"row\" <= 52;");
+            var weightedPointsInsertion = connection.prepareStatement("INSERT INTO WEIGHTED_POINTS VALUES (?, 1, ?, " + this.endWeek + " ," + this.endYear.getValue() + ")\n" +
+                    "ON DUPLICATE KEY UPDATE WEIGHTED_POINTS = WEIGHTED_POINTS + VALUES(WEIGHTED_POINTS)");
+
+            while(resultSet.next()) {
+                int playerID = resultSet.getInt("PLAYER_ID");
+                //These points are multiplied by 100
+                long unweightedPoints = resultSet.getLong("POINTS");
+                var yearNum = 2 - (endYear.getValue() - resultSet.getInt("YEAR"));
+                var week = resultSet.getInt("WEEK");
+                //The points are now multiplied by 100 * 10,000 = 1,000,000
+                var weight = this.weightIndex[yearNum][week - 1];
+                long weightedPoints = unweightedPoints * weight;
+                //The points are now multiplied by 100
+                weightedPointsInsertion.setInt(1, playerID);
+                weightedPointsInsertion.setLong(2, weightedPoints);
+                weightedPointsInsertion.execute();
+            }
+        } catch(SQLException e) {
+            e.printStackTrace();
+        }
     }
 
     /**
