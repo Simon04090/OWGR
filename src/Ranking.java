@@ -16,17 +16,14 @@ import java.time.LocalDate;
 import java.time.Year;
 import java.time.temporal.IsoFields;
 import java.time.temporal.TemporalAdjusters;
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.ArrayList;
+import java.util.List;
 
 public class Ranking {
 
     private final int endWeek;
     private final Year endYear;
     private final int[][] weightIndex;
-    private final Map<Integer, Long> playerWeightedPointsMap;
-    private final Map<Integer, Integer> playerEventCountMap;
-    private final Map<Integer, String> playerNameMap;
     private PreparedStatement eventInsertion;
 
     /**
@@ -43,9 +40,6 @@ public class Ranking {
      * @param endYear the year the ranking should end at.
      */
     public Ranking(int endWeek, Year endYear) {
-        this.playerWeightedPointsMap = new HashMap<>();
-        this.playerEventCountMap = new HashMap<>();
-        this.playerNameMap = new HashMap<>();
         this.endWeek = endWeek;
         this.endYear = endYear;
         this.weightIndex = getWeightIndex();
@@ -78,16 +72,13 @@ public class Ranking {
                 connection.createStatement().execute("CREATE TABLE EVENT (ID INTEGER NOT NULL, NAME TEXT, WEEK TINYINT, YEAR YEAR, CONSTRAINT EVENT_PK PRIMARY KEY (ID));\n" +
                         "CREATE TABLE PLAYERS (ID INTEGER NOT NULL, NAME TEXT, CONSTRAINT PLAYERS_PK PRIMARY KEY (ID));\n" +
                         "CREATE TABLE POINTS (EVENT_ID  INTEGER NOT NULL, PLAYER_ID INTEGER NOT NULL, POINTS BIGINT NOT NULL, CONSTRAINT POINTS_EVENT_ID_FK FOREIGN KEY " +
-                        "(EVENT_ID) REFERENCES EVENT(ID), CONSTRAINT POINTS_PLAYERS_ID_FK FOREIGN KEY (PLAYER_ID) REFERENCES PLAYERS(ID));")
-                ;
+                        "(EVENT_ID) REFERENCES EVENT(ID), CONSTRAINT POINTS_PLAYERS_ID_FK FOREIGN KEY (PLAYER_ID) REFERENCES PLAYERS(ID));\n" +
+                        "CREATE TABLE WEIGHTED_POINTS(PLAYER_ID INTEGER NOT NULL, COUNT INTEGER, WEIGHTED_POINTS BIGINT, WEEK TINYINT NOT NULL, YEAR YEAR NOT NULL, CONSTRAINT " +
+                        "WEIGHTED_POINTS_PK PRIMARY KEY (PLAYER_ID, WEEK, YEAR), CONSTRAINT WEIGHTED_POINTS_PLAYERS_ID_FK FOREIGN KEY (PLAYER_ID) REFERENCES PLAYERS (ID));");
             }
 
+            connection.createStatement().execute("TRUNCATE TABLE WEIGHTED_POINTS;");
             eventInsertion = connection.prepareStatement("INSERT IGNORE INTO EVENT VALUES (?,?,?,?)");
-            var playerInsertion = connection.prepareStatement("INSERT IGNORE INTO PLAYERS VALUES (?,?)");
-            var pointsInsertion = connection.prepareStatement("INSERT IGNORE INTO POINTS VALUES (?,?,?)");
-
-            var pointSelection = connection.prepareStatement("SELECT * FROM POINTS WHERE EVENT_ID = ?");
-            var playerSelection = connection.prepareStatement("SELECT NAME FROM PLAYERS WHERE ID = ?");
 
             var events = eventsForYear(this.endYear);
             var events1 = eventsForYear(this.endYear.minusYears(1));
@@ -95,10 +86,17 @@ public class Ranking {
             events.addAll(events1);
             events.addAll(events2);
 
+            var playerInsertion = connection.prepareStatement("INSERT IGNORE INTO PLAYERS VALUES (?,?)");
+            var pointsInsertion = connection.prepareStatement("INSERT IGNORE INTO POINTS VALUES (?,?,?)");
+            var weightedPointsInsertion =
+                    connection.prepareStatement("INSERT INTO WEIGHTED_POINTS VALUES (?, 1, ?, " + this.endWeek + " ," + this.endYear.getValue() + ")\n" +
+                            "ON DUPLICATE KEY UPDATE COUNT = COUNT + 1,  WEIGHTED_POINTS = WEIGHTED_POINTS + VALUES(WEIGHTED_POINTS)");
+
+
+            var pointSelection = connection.prepareStatement("SELECT * FROM POINTS WHERE EVENT_ID = ?");
+
             for(Event event : events) {
-                event.analyze(weightIndex[event.yearNum][event.week - 1], pointSelection, playerSelection, playerInsertion, pointsInsertion,
-                        playerWeightedPointsMap,
-                        playerEventCountMap, playerNameMap);
+                event.analyze(weightIndex[event.yearNum][event.week - 1], pointSelection, playerInsertion, pointsInsertion, weightedPointsInsertion);
             }
         } catch(SQLException e) {
             System.err.println("Some error occurred while interacting with the database. Most likely when opening/closing the connection or creating the statements.");
@@ -160,13 +158,23 @@ public class Ranking {
      * Calculates the average points for each player, converts the numbers into decimal strings and prints a tab separated table into OWGR.txt and to System.out.
      */
     public void printTable() {
-        //Divides the points by eventCount or 40/52 if too small/large.
-        //Also discards the last digit (points now multiplied by 100,000) because we only need 4 decimal places for displaying and one additional for rounding.
-        var playerAveragePointMap = playerWeightedPointsMap.entrySet().parallelStream()
-                .peek(entry -> entry.setValue(entry.getValue() / (Math.min(52, Math.max(40, playerEventCountMap.getOrDefault(entry.getKey(), 0))) * 10)))
-                .sorted(Collections.reverseOrder(Map.Entry.comparingByValue()))
-                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (o1, o2) -> o1, LinkedHashMap::new));
         PrintWriter writer;
+        var averagePoints = new ArrayList<Long>();
+        var names = new ArrayList<String>();
+
+        try(var connection = DriverManager.getConnection("jdbc:h2:./db;MODE=MySQL")) {
+            var statement = connection.createStatement();
+            //Divides the points by eventCount or 40/52 if too small/large.
+            //Also discards the last digit (points now multiplied by 100,000) because we only need 4 decimal places for displaying and one additional for rounding.
+            var resultSet = statement.executeQuery("SELECT NAME, ((WEIGHTED_POINTS) / (LEAST(52, GREATEST(40, COUNT)) * 10)) AS AVERAGE_POINTS FROM WEIGHTED_POINTS, PLAYERS\n" +
+                    "WHERE PLAYERS.ID = PLAYER_ID AND WEIGHTED_POINTS > 0 GROUP BY PLAYER_ID ORDER BY AVERAGE_POINTS DESC\n");
+            while(resultSet.next()) {
+                averagePoints.add(resultSet.getLong("AVERAGE_POINTS"));
+                names.add(resultSet.getString("NAME"));
+            }
+        } catch(SQLException e) {
+            e.printStackTrace();
+        }
         try {
             var fileWriter = new PrintWriter("OWGR.txt");
             OutputStream outputStream = new OutputStream() {
@@ -195,13 +203,13 @@ public class Ranking {
         int place = 1;
         long previousPositionPoints = 0;
         int numberTied = 1;
-        int maxNameLength = playerNameMap.entrySet().parallelStream().mapToInt(value -> value.getValue().length()).max().orElse(0);
+        int maxNameLength = names.parallelStream().mapToInt(String::length).max().orElse(0);
         //At least 5 digits (pad with zeros)
         var format = new DecimalFormat("00000");
-        for(Map.Entry<Integer, Long> playerIDPoints : playerAveragePointMap.entrySet()) {
-            String playerName = playerNameMap.getOrDefault(playerIDPoints.getKey(), "Fail");
+        for(int i = 0; i < averagePoints.size(); i++) {
+            String playerName = names.get(i);
             //Round to 10s and discard last digit (now multiplied by 10,000)
-            long roundedAverage = ((playerIDPoints.getValue() + 5) / 10);
+            long roundedAverage = ((averagePoints.get(i) + 5) / 10);
             String averageAsString = format.format(roundedAverage);
             int endIndex = averageAsString.length() - 4;
             //Format it so the last 4 digits are after the decimal point.
