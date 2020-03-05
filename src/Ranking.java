@@ -1,3 +1,4 @@
+import org.h2.jdbcx.JdbcConnectionPool;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 
@@ -7,7 +8,6 @@ import java.math.RoundingMode;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.text.DecimalFormat;
@@ -23,66 +23,69 @@ public class Ranking {
 
     private final int endWeek;
     private final Year endYear;
+    private final JdbcConnectionPool connectionPool;
     private final int[][] weightIndex;
-    private PreparedStatement eventInsertion;
 
     /**
      * Creates a ranking ending at the sunday of the current week, i.e. already after the events of the current week.
+     *
+     * @param connectionPool the Connection pool that should be used to connect to the database.
      */
-    public Ranking() {
-        this(LocalDate.now().with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY)).get(IsoFields.WEEK_OF_WEEK_BASED_YEAR), Year.now());
+    public Ranking(JdbcConnectionPool connectionPool) {
+        this(LocalDate.now().with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY)).get(IsoFields.WEEK_OF_WEEK_BASED_YEAR), Year.now(), connectionPool);
     }
 
     /**
      * Creates a ranking ending at given week in the given year, i.e. already after the events of that week.
      *
-     * @param endWeek the week the ranking should end at.
-     * @param endYear the year the ranking should end at.
+     * @param endWeek        the week the ranking should end at.
+     * @param endYear        the year the ranking should end at.
+     * @param connectionPool the Connection pool that should be used to connect to the database.
      */
-    public Ranking(int endWeek, Year endYear) {
+    public Ranking(int endWeek, Year endYear, JdbcConnectionPool connectionPool) {
         this.endWeek = endWeek;
         this.endYear = endYear;
+        this.connectionPool = connectionPool;
         this.weightIndex = getWeightIndex();
     }
 
     /**
      * Creates a ranking ending at given date, i.e. already after the events of that week.
      *
-     * @param endDate the date the ranking should end at.
+     * @param endDate        the date the ranking should end at.
+     * @param connectionPool the Connection pool that should be used to connect to the database.
      */
-    public Ranking(LocalDate endDate) {
-        this(endDate.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR), Year.from(endDate));
+    public Ranking(LocalDate endDate, JdbcConnectionPool connectionPool) {
+        this(endDate.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR), Year.from(endDate), connectionPool);
     }
 
     /**
      * Generates the Ranking associated with the week and year of this Ranking and stores it. Updates and uses the data from the database.
      */
     public void generateRanking() {
-        try {
-            Class.forName("org.h2.Driver"); //Load right driver
-        } catch(ClassNotFoundException e) {
-            System.err.println("Couldn't find Database driver. Printing stacktrace and then exiting...");
-            e.printStackTrace();
-            return;
-        }
-
-        try(var connection = DriverManager.getConnection("jdbc:h2:./db;MODE=MySQL")) {
-            //Create Tables (only needed once) (Assuming if the file is there the tables have been created.)
-            if(!Files.exists(Path.of("db.mv.db"))) {
-                connection.createStatement().execute("CREATE TABLE EVENT (ID INTEGER NOT NULL, NAME TEXT, WEEK TINYINT, YEAR YEAR, CONSTRAINT EVENT_PK PRIMARY KEY (ID));\n" +
+        //Create Tables (only needed once) (Assuming if the file is there the tables have been created.)
+        if(!Files.exists(Path.of("db.mv.db"))) {
+            try(var conn = connectionPool.getConnection()) {
+                conn.createStatement().execute("CREATE TABLE EVENT (ID INTEGER NOT NULL, NAME TEXT, WEEK TINYINT, YEAR YEAR, CONSTRAINT EVENT_PK PRIMARY KEY (ID));\n" +
                         "CREATE TABLE PLAYERS (ID INTEGER NOT NULL, NAME TEXT, CONSTRAINT PLAYERS_PK PRIMARY KEY (ID));\n" +
                         "CREATE TABLE POINTS (EVENT_ID  INTEGER NOT NULL, PLAYER_ID INTEGER NOT NULL, POINTS BIGINT NOT NULL, CONSTRAINT POINTS_EVENT_ID_FK FOREIGN KEY " +
                         "(EVENT_ID) REFERENCES EVENT(ID), CONSTRAINT POINTS_PLAYERS_ID_FK FOREIGN KEY (PLAYER_ID) REFERENCES PLAYERS(ID));\n" +
                         "CREATE TABLE WEIGHTED_POINTS(PLAYER_ID INTEGER NOT NULL, COUNT INTEGER, WEIGHTED_POINTS BIGINT, WEEK TINYINT NOT NULL, YEAR YEAR NOT NULL, CONSTRAINT " +
                         "WEIGHTED_POINTS_PK PRIMARY KEY (PLAYER_ID, WEEK, YEAR), CONSTRAINT WEIGHTED_POINTS_PLAYERS_ID_FK FOREIGN KEY (PLAYER_ID) REFERENCES PLAYERS (ID));");
+            } catch(SQLException e) {
+                System.err.println("Some error occurred when creating the database.");
+                e.printStackTrace();
             }
+        }
 
+
+        try(var connection = connectionPool.getConnection()) {
             connection.createStatement().execute("TRUNCATE TABLE WEIGHTED_POINTS;");
-            eventInsertion = connection.prepareStatement("INSERT IGNORE INTO EVENT VALUES (?,?,?,?)");
+            var eventInsertion = connection.prepareStatement("INSERT IGNORE INTO EVENT VALUES (?,?,?,?)");
 
-            var events = eventsForYear(this.endYear);
-            var events1 = eventsForYear(this.endYear.minusYears(1));
-            var events2 = eventsForYear(this.endYear.minusYears(2));
+            var events = eventsForYear(this.endYear, eventInsertion);
+            var events1 = eventsForYear(this.endYear.minusYears(1), eventInsertion);
+            var events2 = eventsForYear(this.endYear.minusYears(2), eventInsertion);
             events.addAll(events1);
             events.addAll(events2);
 
@@ -109,11 +112,12 @@ public class Ranking {
      * <p>
      * Returns a List containing the events. Inserts the events into the database.
      *
-     * @param year the year to get the events for.
+     * @param year           the year to get the events for.
+     * @param eventInsertion the Statement used to insert the events (1st parameter is the eventID, 2nd the name, 3rd the week, 4th the year)
      *
      * @return a List containing the events.
      */
-    private List<Event> eventsForYear(Year year) {
+    private List<Event> eventsForYear(Year year, PreparedStatement eventInsertion) {
         List<Event> eventList = new ArrayList<>();
         Document parse;
         try {
@@ -131,7 +135,7 @@ public class Ranking {
             var event1 = new Event(week, year1, event, this.endYear);
             eventList.add(event1);
 
-            insertEventIntoDatabase(event1);
+            insertEventIntoDatabase(event1, eventInsertion);
         }
         return eventList;
     }
@@ -139,9 +143,10 @@ public class Ranking {
     /**
      * Inserts the given event into the database.
      *
-     * @param event the event to insert.
+     * @param event          the event to insert.
+     * @param eventInsertion the Statement used to insert the events (1st parameter is the eventID, 2nd the name, 3rd the week, 4th the year)
      */
-    private void insertEventIntoDatabase(Event event) {
+    private void insertEventIntoDatabase(Event event, PreparedStatement eventInsertion) {
         try {
             eventInsertion.setInt(1, event.id);
             eventInsertion.setString(2, event.name);
@@ -162,7 +167,7 @@ public class Ranking {
         var averagePoints = new ArrayList<Long>();
         var names = new ArrayList<String>();
 
-        try(var connection = DriverManager.getConnection("jdbc:h2:./db;MODE=MySQL")) {
+        try(var connection = connectionPool.getConnection()) {
             var statement = connection.createStatement();
             //Divides the points by eventCount or 40/52 if too small/large.
             //Also discards the last digit (points now multiplied by 100,000) because we only need 4 decimal places for displaying and one additional for rounding.
