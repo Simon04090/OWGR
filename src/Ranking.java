@@ -18,6 +18,10 @@ import java.time.temporal.IsoFields;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 public class Ranking {
 
@@ -78,33 +82,67 @@ public class Ranking {
             }
         }
 
-
+        List<Event> events = new ArrayList<>();
         try(var connection = connectionPool.getConnection()) {
             connection.createStatement().execute("TRUNCATE TABLE WEIGHTED_POINTS;");
             var eventInsertion = connection.prepareStatement("INSERT IGNORE INTO EVENT VALUES (?,?,?,?)");
 
-            var events = eventsForYear(this.endYear, eventInsertion);
+            events = eventsForYear(this.endYear, eventInsertion);
             var events1 = eventsForYear(this.endYear.minusYears(1), eventInsertion);
             var events2 = eventsForYear(this.endYear.minusYears(2), eventInsertion);
             events.addAll(events1);
             events.addAll(events2);
 
-            var playerInsertion = connection.prepareStatement("INSERT IGNORE INTO PLAYERS VALUES (?,?)");
-            var pointsInsertion = connection.prepareStatement("INSERT IGNORE INTO POINTS VALUES (?,?,?)");
-            var weightedPointsInsertion =
-                    connection.prepareStatement("INSERT INTO WEIGHTED_POINTS VALUES (?, 1, ?, " + this.endWeek + " ," + this.endYear.getValue() + ")\n" +
-                            "ON DUPLICATE KEY UPDATE COUNT = COUNT + 1,  WEIGHTED_POINTS = WEIGHTED_POINTS + VALUES(WEIGHTED_POINTS)");
-
-
-            var pointSelection = connection.prepareStatement("SELECT * FROM POINTS WHERE EVENT_ID = ?");
-
-            for(Event event : events) {
-                event.analyze(weightIndex[event.yearNum][event.week - 1], pointSelection, playerInsertion, pointsInsertion, weightedPointsInsertion);
-            }
         } catch(SQLException e) {
             System.err.println("Some error occurred while interacting with the database. Most likely when opening/closing the connection or creating the statements.");
             e.printStackTrace();
         }
+        analyzeEvents(events);
+
+    }
+
+    /**
+     * Analyzes the events in the given List.
+     * <p>
+     * Adds the results into the database. Uses all available processors.
+     *
+     * @param events the events to analyze.
+     */
+    private void analyzeEvents(List<Event> events) {
+        List<Future<?>> futures = new ArrayList<>();
+        ExecutorService executorService = Executors.newWorkStealingPool();
+        int taskCount = 10;
+        for(int task = 0; task < taskCount; task++) {
+            int finalTask = task;
+            Future<?> submit = executorService.submit(() -> {
+                try(var connection = connectionPool.getConnection()) {
+                    var playerInsertion = connection.prepareStatement("INSERT IGNORE INTO PLAYERS VALUES (?,?)");
+                    var pointsInsertion = connection.prepareStatement("INSERT IGNORE INTO POINTS VALUES (?,?,?)");
+                    var weightedPointsInsertion = connection.prepareStatement("INSERT INTO WEIGHTED_POINTS VALUES (?, 1, ?, " + this.endWeek + " ," + this.endYear.getValue() +
+                            ") ON DUPLICATE KEY UPDATE COUNT = COUNT + 1,  WEIGHTED_POINTS = WEIGHTED_POINTS + VALUES(WEIGHTED_POINTS)");
+
+                    var pointSelection = connection.prepareStatement("SELECT * FROM POINTS WHERE EVENT_ID = ?");
+
+                    for(int i = finalTask; i < events.size(); i += taskCount) {
+                        Event event = events.get(i);
+                        event.analyze(weightIndex[event.yearNum][event.week - 1], pointSelection, playerInsertion, pointsInsertion, weightedPointsInsertion);
+                    }
+                } catch(SQLException e) {
+                    System.err.println("Some error occurred when opening the connection/creating the statements.");
+                    e.printStackTrace();
+                }
+            });
+            futures.add(submit);
+        }
+        executorService.shutdown();
+        futures.forEach(future -> {
+            try {
+                future.get();
+            } catch(InterruptedException | ExecutionException e) {
+                System.err.println("Could not complete waiting for some future.");
+                e.printStackTrace();
+            }
+        });
     }
 
     /**
